@@ -1,0 +1,109 @@
+{
+  "resource": "/video",
+  "path": "/video",
+  "httpMethod": "POST",
+  "headers": {
+    "Accept": "*/*",
+    "CloudFront-Forwarded-Proto": "https",
+    "CloudFront-Is-Desktop-Viewer": "true",
+    "CloudFront-Is-Mobile-Viewer": "false",
+    "CloudFront-Is-SmartTV-Viewer": "false",
+    "CloudFront-Is-Tablet-Viewer": "false",
+    "CloudFront-Viewer-Country": "AU",
+    "content-type": "application/json",
+    "Host": "chw6q7n9oc.execute-api.ap-southeast-2.amazonaws.com",
+    "User-Agent": "curl/7.65.3",
+    "Via": "2.0 4e5743c9676a1fb1245239f1bb671245.cloudfront.net (CloudFront)",
+    "X-Amz-Cf-Id": "RSGvq0U3MzNBHoVgvhQ8D-vNGZpGKb9p-c0HCu3MGT9GFd_uNumzmQ==",
+    "X-Amzn-Trace-Id": "Root=1-5e184d8f-e6e2777e68faa2e448406c88",
+    "X-Forwarded-For": "124.168.72.224, 64.252.184.159",
+    "X-Forwarded-Port": "443",
+    "X-Forwarded-Proto": "https"
+  },
+  "multiValueHeaders": {
+    "Accept": [
+      "*/*"
+    ],
+    "CloudFront-Forwarded-Proto": [
+      "https"
+    ],
+    "CloudFront-Is-Desktop-Viewer": [
+      "true"
+    ],
+    "CloudFront-Is-Mobile-Viewer": [
+      "false"
+    ],
+    "CloudFront-Is-SmartTV-Viewer": [
+      "false"
+    ],
+    "CloudFront-Is-Tablet-Viewer": [
+      "false"
+    ],
+    "CloudFront-Viewer-Country": [
+      "AU"
+    ],
+    "content-type": [
+      "application/json"
+    ],
+    "Host": [
+      "chw6q7n9oc.execute-api.ap-southeast-2.amazonaws.com"
+    ],
+    "User-Agent": [
+      "curl/7.65.3"
+    ],
+    "Via": [
+      "2.0 4e5743c9676a1fb1245239f1bb671245.cloudfront.net (CloudFront)"
+    ],
+    "X-Amz-Cf-Id": [
+      "RSGvq0U3MzNBHoVgvhQ8D-vNGZpGKb9p-c0HCu3MGT9GFd_uNumzmQ=="
+    ],
+    "X-Amzn-Trace-Id": [
+      "Root=1-5e184d8f-e6e2777e68faa2e448406c88"
+    ],
+    "X-Forwarded-For": [
+      "124.168.72.224, 64.252.184.159"
+    ],
+    "X-Forwarded-Port": [
+      "443"
+    ],
+    "X-Forwarded-Proto": [
+      "https"
+    ]
+  },
+  "queryStringParameters": null,
+  "multiValueQueryStringParameters": null,
+  "pathParameters": null,
+  "stageVariables": null,
+  "requestContext": {
+    "resourceId": "am7t8d",
+    "resourcePath": "/video",
+    "httpMethod": "POST",
+    "extendedRequestId": "GFEOXFAWSwMFeZg=",
+    "requestTime": "10/Jan/2020:10:10:23 +0000",
+    "path": "/Prod/video",
+    "accountId": "010316939032",
+    "protocol": "HTTP/1.1",
+    "stage": "Prod",
+    "domainPrefix": "chw6q7n9oc",
+    "requestTimeEpoch": 1578651023043,
+    "requestId": "ae6f88f8-00cc-4816-8cfd-10e51c820333",
+    "identity": {
+      "cognitoIdentityPoolId": null,
+      "accountId": null,
+      "cognitoIdentityId": null,
+      "caller": null,
+      "sourceIp": "124.168.72.224",
+      "principalOrgId": null,
+      "accessKey": null,
+      "cognitoAuthenticationType": null,
+      "cognitoAuthenticationProvider": null,
+      "userArn": null,
+      "userAgent": "curl/7.65.3",
+      "user": null
+    },
+    "domainName": "chw6q7n9oc.execute-api.ap-southeast-2.amazonaws.com",
+    "apiId": "chw6q7n9oc"
+  },
+  "body": "{\"url\":\"https://www.youtube.com/watch?v=ucZl6vQ_8Uo\"}",
+  "isBase64Encoded": "false"
+}

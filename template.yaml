@@ -1,0 +1,202 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: pycast
+
+Globals:
+  Function:
+    Timeout: 900
+
+Resources:
+
+  ############ Observer Function  ############
+
+  ApiObserverFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./src
+      Handler: app.observer_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TelegramNotification: true
+      Events:
+        AddEpisode:
+          Type: Api
+          Properties:
+            Path: /video
+            Method: post
+      Role: !GetAtt ApiObserverFunctionExecutionRole.Arn
+
+  ApiObserverFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Policies:
+        - PolicyName: access-ssm
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:DescribeParameters
+                  - ssm:GetParameter
+                Resource: '*'
+
+  ############ State machine  ############
+
+  PyCastStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: PyCast-StateMachine
+      RoleArn: !GetAtt PyCastFunctionExecutionRole.Arn
+      DefinitionString:
+        Fn::Sub: |
+          {
+            "Comment": "PyCast Workflow",
+            "StartAt": "DownloadCast",
+            "States": {
+              "DownloadCast": {
+                "Type": "Task",
+                "Resource": "${PyCastFunction.Arn}",
+                "Next": "DownloadCastStatus"
+              },
+              "DownloadCastStatus": {
+                "Type": "Choice",
+                "Choices": [
+                {
+                  "Variable": "$.Status",
+                  "StringEquals": "SUCCESS",
+                  "Next": "UpdatePodcastData"
+                },
+                {
+                  "Variable": "$.Status",
+                  "StringEquals": "FAILED",
+                  "Next": "FailDownloadCast"
+                }
+                ],
+                "Default": "FailDownloadCast"
+              },
+              "UpdatePodcastData": {
+                "Type": "Task",
+                "Resource": "${PyCastFunction.Arn}",
+                "Next": "UpdatePodcastDataStatus"
+              },
+              "UpdatePodcastDataStatus": {
+                "Type": "Choice",
+                "Choices": [
+                {
+                  "Variable": "$.Status",
+                  "StringEquals": "SUCCESS",
+                  "Next": "SuccessPyCast"
+                },
+                {
+                  "Variable": "$.Status",
+                  "StringEquals": "FAILED",
+                  "Next": "FailUpdatePodcastData"
+                }
+                ],
+                "Default": "FailUpdatePodcastData"
+              },
+              "SuccessPyCast": {
+                "Type": "Succeed"
+              },
+              "FailDownloadCast": {
+                "Type": "Fail",
+                "Error": "DownloadCastError",
+                "Cause": "Failure Cast Downloading"
+              },
+              "FailUpdatePodcastData": {
+                "Type": "Fail",
+                "Error": "UpdatePodcastDataError",
+                "Cause": "Failure Updating Podcast Data"
+              }
+            }
+          }
+
+  ############ State machine functions ############
+
+  PyCastFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./src
+      Handler: app.download_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref PyCastBucket
+          TABLE_NAME: !Ref PyCastDataTable
+      Role: !GetAtt PyCastFunctionExecutionRole.Arn
+
+  PyCastDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: "PyCastData"
+      AttributeDefinitions:
+        - AttributeName: "EpisodeId"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "EpisodeId"
+          KeyType: "HASH"
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+      SSESpecification:
+        SSEEnabled: true
+
+  PyCastBucket:
+    Type: AWS::S3::Bucket
+
+  PyCastFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Policies:
+        - PolicyName: access-s3
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListAllMyBuckets
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 's3:*'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${PyCastBucket}'
+                  - !Sub 'arn:aws:s3:::${PyCastBucket}/*'
+        - PolicyName: access-ddb
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:DescribeTable'
+                  - 'dynamodb:Query'
+                Resource: '*'
+
+Outputs:
+  PyCastApi:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/video/"
