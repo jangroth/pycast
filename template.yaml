@@ -10,6 +10,25 @@ Resources:
 
   ############ Observer Function  ############
 
+  PyCastDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: "PyCastData"
+      AttributeDefinitions:
+        - AttributeName: "EpisodeId"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "EpisodeId"
+          KeyType: "HASH"
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+      SSESpecification:
+        SSEEnabled: true
+
+  PyCastBucket:
+    Type: AWS::S3::Bucket
+
   ApiObserverFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -18,7 +37,8 @@ Resources:
       Runtime: python3.7
       Environment:
         Variables:
-          TelegramNotification: true
+          STATE_MACHINE: !Ref PyCastStateMachine
+          TELEGRAM_NOTIFICATION: true
       Events:
         AddEpisode:
           Type: Api
@@ -51,6 +71,14 @@ Resources:
                   - ssm:DescribeParameters
                   - ssm:GetParameter
                 Resource: '*'
+        - PolicyName: start-statemachine
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: '*'
 
   ############ State machine  ############
 
@@ -58,7 +86,7 @@ Resources:
     Type: AWS::StepFunctions::StateMachine
     Properties:
       StateMachineName: PyCast-StateMachine
-      RoleArn: !GetAtt PyCastFunctionExecutionRole.Arn
+      RoleArn: !GetAtt PyCastStateMachineExecutionRole.Arn
       DefinitionString:
         Fn::Sub: |
           {
@@ -67,7 +95,7 @@ Resources:
             "States": {
               "DownloadCast": {
                 "Type": "Task",
-                "Resource": "${PyCastFunction.Arn}",
+                "Resource": "${DownloadCastFunction.Arn}",
                 "Next": "DownloadCastStatus"
               },
               "DownloadCastStatus": {
@@ -88,7 +116,7 @@ Resources:
               },
               "UpdatePodcastData": {
                 "Type": "Task",
-                "Resource": "${PyCastFunction.Arn}",
+                "Resource": "${DownloadCastFunction.Arn}",
                 "Next": "UpdatePodcastDataStatus"
               },
               "UpdatePodcastDataStatus": {
@@ -123,40 +151,47 @@ Resources:
             }
           }
 
+  PyCastStateMachineExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - !Sub "states.${AWS::Region}.amazonaws.com"
+      Path: "/"
+      Policies:
+        - PolicyName: StatesExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource: "*"
+
   ############ State machine functions ############
 
-  PyCastFunction:
+  DownloadCastFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ./src
-      Handler: app.download_handler
+      Handler: app.download_cast_handler
       Runtime: python3.7
       Environment:
         Variables:
           BUCKET_NAME: !Ref PyCastBucket
           TABLE_NAME: !Ref PyCastDataTable
-      Role: !GetAtt PyCastFunctionExecutionRole.Arn
+          TELEGRAM_NOTIFICATION: true
+      Role: !GetAtt DownloadCastFunctionExecutionRole.Arn
 
-  PyCastDataTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: "PyCastData"
-      AttributeDefinitions:
-        - AttributeName: "EpisodeId"
-          AttributeType: "S"
-      KeySchema:
-        - AttributeName: "EpisodeId"
-          KeyType: "HASH"
-      ProvisionedThroughput:
-        ReadCapacityUnits: 1
-        WriteCapacityUnits: 1
-      SSESpecification:
-        SSEEnabled: true
-
-  PyCastBucket:
-    Type: AWS::S3::Bucket
-
-  PyCastFunctionExecutionRole:
+  DownloadCastFunctionExecutionRole:
     Type: AWS::IAM::Role
     Properties:
       ManagedPolicyArns:
@@ -171,6 +206,15 @@ Resources:
               Service:
                 - lambda.amazonaws.com
       Policies:
+        - PolicyName: access-ssm
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:DescribeParameters
+                  - ssm:GetParameter
+                Resource: '*'
         - PolicyName: access-s3
           PolicyDocument:
             Version: 2012-10-17

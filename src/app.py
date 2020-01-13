@@ -41,7 +41,7 @@ class TelegramNotifier:
 
 def notify_telegram(function):
     def wrapper(*args, **kwargs):
-        if os.environ.get('TelegramNotification', 'False').lower() == 'true':
+        if os.environ.get('TELEGRAM_NOTIFICATION', 'False').lower() == 'true':
             telegram = TelegramNotifier()
             telegram.notify_entry(context=args[1])
             result = function(*args, **kwargs)
@@ -106,18 +106,48 @@ class Downloader:
         logger.info(f'Storing metadata: {metadata}')
 
 
+class Observer:
+
+    def __init__(self):
+        self.sfn_client = boto3.client('stepfunctions')
+
+    def _start_state_machine(self, message):
+        response = self.sfn_client.start_execution(
+            stateMachineArn=os.environ.get('STATE_MACHINE', None),
+            input=json.dumps(message)
+        )
+        logging.info(f"Starting state machine: '{response['executionArn']}'")
+
+    def handle_event(self, event):
+        try:
+            event_body = json.loads(event['body'])
+            url = event_body['url']
+            self._start_state_machine(event_body)
+            status_code = 200
+            message = f"Received '{url}'..."
+        except KeyError as e:
+            status_code = 400
+            message = "Expecting 'url' in request body..."
+        except Exception as e:
+            status_code = 500
+            message = f"Error '{e}'"
+        return {
+            "statusCode": status_code,
+            "body": json.dumps({
+                "message": message
+            }),
+        }
+
+
 @notify_telegram
 @notify_cloudwatch
 def observer_handler(event, context):
-    return {
-        "statusCode": 200,
-        "body": json.dumps({
-            "message": 'I\'m happy'
-        }),
-    }
+    return Observer().handle_event(event)
 
 
-def download_handler(event, context):
+@notify_telegram
+@notify_cloudwatch
+def download_cast_handler(event, context):
     bucket = os.environ['BUCKET_NAME']
     table = os.environ['TABLE_NAME']
     event_body = json.loads(event['body'])
