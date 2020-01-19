@@ -116,7 +116,7 @@ Resources:
               },
               "UpdatePodcastData": {
                 "Type": "Task",
-                "Resource": "${DownloadCastFunction.Arn}",
+                "Resource": "${UpdatePodcastDataFunction.Arn}",
                 "Next": "UpdatePodcastDataStatus"
               },
               "UpdatePodcastDataStatus": {
@@ -191,6 +191,17 @@ Resources:
           TELEGRAM_NOTIFICATION: true
       Role: !GetAtt DownloadCastFunctionExecutionRole.Arn
 
+  UpdatePodcastDataFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./src
+      Handler: app.update_podcast__data_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TELEGRAM_NOTIFICATION: true
+      Role: !GetAtt UpdatePodcastDataFunctionExecutionRole.Arn
+
   DownloadCastFunctionExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -238,7 +249,34 @@ Resources:
                 Action:
                   - 'dynamodb:DescribeTable'
                   - 'dynamodb:Query'
+                  - 'dynamodb:PutItem'
                 Resource: '*'
+
+  UpdatePodcastDataFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Policies:
+        - PolicyName: access-ssm
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:DescribeParameters
+                  - ssm:GetParameter
+                Resource: '*'
+
 
 Outputs:
   PyCastApi:
