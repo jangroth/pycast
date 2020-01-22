@@ -111,7 +111,7 @@ class Downloader:
             file_name = f'{youtube.video_id}.mp4'
             bucket_path = f"audio/default/{file_name}"
             logger.info(f'Starting download into {tmp_dir}...')
-            download_file_path = youtube.streams.filter(only_audio=True).filter(subtype='mp4').order_by('bitrate').desc().first().download(output_path=tmp_dir, filename=youtube.video_id)
+            download_file_path = youtube.streams.filter(only_audio=True).filter(subtype='mp4').order_by('abr').desc().first().download(output_path=tmp_dir, filename=youtube.video_id)
             logger.info(f'Finished download ({download_file_path}, now uploading to S3 ({self.bucket_name}:{bucket_path})')
             self.s3_bucket.upload_file(download_file_path, bucket_path)
             logger.info('Finished upload.')
@@ -146,7 +146,7 @@ class Downloader:
             audio_information = AudioInformation(title=yt.title, video_id=yt.video_id, views=yt.views, rating=yt.rating, description=yt.description)
             download_information = self._download(yt)
             self._store_metadata(download_information, audio_information)
-            TelegramNotifier().send(f'Download finished, database updated:\n{audio_information}')
+            TelegramNotifier().send(f'Download finished, database updated.')
             status = 'SUCCESS'
             data = dict([('url', url), ('audio_information', audio_information), ('download_information', download_information)])
         except Exception as e:
