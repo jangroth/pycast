@@ -8,6 +8,7 @@ from datetime import datetime
 import boto3
 import requests
 from pytube import YouTube
+from feedgen.feed import FeedGenerator
 
 logging.basicConfig(format='%(asctime)s %(name)s %(levelname)s %(message)s')
 logger = logging.getLogger('PyCast')
@@ -69,6 +70,8 @@ class Observer:
 
     def __init__(self):
         self.sfn_client = boto3.client('stepfunctions')
+        self.logger = logging.getLogger('Observer')
+        self.logger.setLevel(os.environ.get('Logging', logging.DEBUG))
 
     def _start_state_machine(self, message):
         response = self.sfn_client.start_execution(
@@ -105,6 +108,9 @@ class Downloader:
         self.table_name = os.environ['TABLE_NAME']
         self.s3_bucket = boto3.resource('s3').Bucket(self.bucket_name)
         self.ddb_table = boto3.resource('dynamodb').Table(self.table_name)
+        self.logger = logging.getLogger('Downloader')
+        self.logger.setLevel(os.environ.get('Logging', logging.DEBUG))
+        
 
     def _download(self, youtube):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -156,7 +162,45 @@ class Downloader:
 
 
 class UpdatePodcast:
+
+    def __init__(self):
+        self.bucket_name = os.environ['BUCKET_NAME']
+        self.table_name = os.environ['TABLE_NAME']
+        self.s3_bucket = boto3.resource('s3').Bucket(self.bucket_name)
+        self.ddb_table = boto3.resource('dynamodb').Table(self.table_name)
+        self.logger = logging.getLogger('UpdatePodcast')
+        self.logger.setLevel(os.environ.get('Logging', logging.DEBUG))
+
+        
     def handle_event(self, event):
+        fg = FeedGenerator()
+        fg.load_extension('podcast')
+        fg.id('http://lernfunk.de/_MEDIAID_123')
+        fg.title('Testfeed')
+        fg.author({'name': 'John Doe', 'email': 'jdoe@example.com'})
+        fg.link(href='http://example.com', rel='alternate')
+        fg.category(term='test')
+        fg.contributor(name='John Doe', email='jdoe@example.com')
+        fg.icon('http://ex.com/icon.jpg')
+        fg.logo('http://ex.com/logo.jpg')
+        fg.rights('cc-by')
+        fg.subtitle('This is a cool feed!')
+        fg.link(href='http://larskiesow.de/test.atom', rel='self')
+        fg.language('de')
+
+        fe = fg.add_entry()
+        fe.id('http://lernfunk.de/media/654321/1/file.mp3')
+        fe.title('The First Episode')
+        fe.description('Enjoy our first episode.')
+        fe.enclosure('audio/default/RjEdmrxjIHQ.mp4', 0, 'audio/mpeg')
+
+        print(fg.rss_str(pretty=True))
+        fg.rss_file('/tmp/podcast.xml')
+
+        self.s3_bucket.upload_file('/tmp/podcast.xml', 'podcast.xml')
+
+
+
         pass
 
 
@@ -176,3 +220,9 @@ def download_cast_handler(event, context):
 @notify_cloudwatch
 def update_podcast__data_handler(event, context):
     return UpdatePodcast().handle_event(event)
+
+
+if __name__ == '__main__':
+    os.environ['TABLE_NAME'] = "PyCastData"
+    os.environ['BUCKET_NAME'] = "pycast-casts"
+    UpdatePodcast().handle_event({})

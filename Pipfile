@@ -9,6 +9,7 @@ verify_ssl = true
 boto3 = "*"
 requests = "*"
 pytube3 = "*"
+feedgen = "*"
 
 [requires]
 python_version = "3.7"

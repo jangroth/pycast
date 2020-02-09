@@ -8,7 +8,29 @@ Globals:
 
 Resources:
 
-  ############ Observer Function  ############
+  ############ Bucket & Data  ############
+
+  PyCastBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: pycast-casts
+      AccessControl: PublicRead
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: 404.html
+
+  PyCastBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref 'PyCastBucket'
+      PolicyDocument:
+        Statement:
+          - Sid: PublicReadForGetBucketObjects
+            Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Join ['', ['arn:aws:s3:::', !Ref 'PyCastBucket', /*]]
 
   PyCastDataTable:
     Type: AWS::DynamoDB::Table
@@ -26,8 +48,7 @@ Resources:
       SSESpecification:
         SSEEnabled: true
 
-  PyCastBucket:
-    Type: AWS::S3::Bucket
+  ############ Observer Function  ############
 
   ApiObserverFunction:
     Type: AWS::Serverless::Function
@@ -39,6 +60,7 @@ Resources:
         Variables:
           STATE_MACHINE: !Ref PyCastStateMachine
           TELEGRAM_NOTIFICATION: true
+          LOGGING: DEBUG
       Events:
         AddEpisode:
           Type: Api
@@ -189,6 +211,7 @@ Resources:
           BUCKET_NAME: !Ref PyCastBucket
           TABLE_NAME: !Ref PyCastDataTable
           TELEGRAM_NOTIFICATION: true
+          LOGGING: DEBUG
       Role: !GetAtt DownloadCastFunctionExecutionRole.Arn
 
   UpdatePodcastDataFunction:
@@ -200,6 +223,7 @@ Resources:
       Environment:
         Variables:
           TELEGRAM_NOTIFICATION: true
+          LOGGING: DEBUG
       Role: !GetAtt UpdatePodcastDataFunctionExecutionRole.Arn
 
   DownloadCastFunctionExecutionRole:
@@ -276,9 +300,27 @@ Resources:
                   - ssm:DescribeParameters
                   - ssm:GetParameter
                 Resource: '*'
+        - PolicyName: access-s3
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListAllMyBuckets
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 's3:*'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${PyCastBucket}'
+                  - !Sub 'arn:aws:s3:::${PyCastBucket}/*'
 
 
 Outputs:
   PyCastApi:
     Description: "API Gateway endpoint URL"
     Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/video/"
+  PyCastBucekt:
+    Description: "Podcast bucket"
+    Value: !Ref PyCastBucket
