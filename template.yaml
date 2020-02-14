@@ -12,9 +12,7 @@ Resources:
 
   PyCastBucket:
     Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
     Properties:
-      BucketName: pycast-casts
       AccessControl: PublicRead
       WebsiteConfiguration:
         IndexDocument: index.html
@@ -35,13 +33,16 @@ Resources:
   PyCastDataTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: "PyCastData"
       AttributeDefinitions:
         - AttributeName: "EpisodeId"
+          AttributeType: "S"
+        - AttributeName: "TimestampUtc"
           AttributeType: "S"
       KeySchema:
         - AttributeName: "EpisodeId"
           KeyType: "HASH"
+        - AttributeName: "TimestampUtc"
+          KeyType: "RANGE"
       ProvisionedThroughput:
         ReadCapacityUnits: 1
         WriteCapacityUnits: 1
@@ -222,6 +223,8 @@ Resources:
       Runtime: python3.7
       Environment:
         Variables:
+          BUCKET_NAME: !Ref PyCastBucket
+          TABLE_NAME: !Ref PyCastDataTable
           TELEGRAM_NOTIFICATION: true
           LOGGING: DEBUG
       Role: !GetAtt UpdatePodcastDataFunctionExecutionRole.Arn
@@ -272,7 +275,6 @@ Resources:
               - Effect: Allow
                 Action:
                   - 'dynamodb:DescribeTable'
-                  - 'dynamodb:Query'
                   - 'dynamodb:PutItem'
                 Resource: '*'
 
@@ -315,12 +317,22 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:s3:::${PyCastBucket}'
                   - !Sub 'arn:aws:s3:::${PyCastBucket}/*'
+        - PolicyName: access-ddb
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:Scan'
+                Resource: '*'
+
 
 
 Outputs:
   PyCastApi:
     Description: "API Gateway endpoint URL"
     Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/video/"
-  PyCastBucekt:
-    Description: "Podcast bucket"
+  PyCastBucketName:
     Value: !Ref PyCastBucket
+  PyCastTable:
+    Value: !Ref PyCastDataTable

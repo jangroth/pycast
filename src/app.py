@@ -2,20 +2,22 @@ import json
 import logging
 import os
 import tempfile
+import time
 from collections import namedtuple
 from datetime import datetime
+from pathlib import Path
 
 import boto3
 import requests
+from jinja2 import Environment, select_autoescape, FileSystemLoader
 from pytube import YouTube
-from feedgen.feed import FeedGenerator
 
 logging.basicConfig(format='%(asctime)s %(name)s %(levelname)s %(message)s')
 logger = logging.getLogger('PyCast')
 logger.setLevel(os.environ.get('Logging', logging.DEBUG))
 
 AudioInformation = namedtuple('AudioInformation', ['title', 'video_id', 'views', 'rating', 'description'])
-UploadInformation = namedtuple('DownloadInformation', ['bucket_path', 'timestamp_utc'])
+UploadInformation = namedtuple('DownloadInformation', ['bucket_path', 'timestamp_utc', 'file_size'])
 
 
 class TelegramNotifier:
@@ -25,8 +27,7 @@ class TelegramNotifier:
         self.chat_id = boto3.client('ssm').get_parameter(Name='/pycast/telegram/chat-id')['Parameter']['Value']
 
     def send(self, message):
-        telegram_url = f'https://api.telegram.org/bot{self.api_token}/sendMessage?chat_id={self.chat_id}&parse_mode=Markdown&text={message}'
-        print(telegram_url)
+        telegram_url = f'https://api.telegram.org/bot{self.api_token}/sendMessage?chat_id={self.chat_id}&parse_mode=HTML&text={message}'
         response = requests.get(telegram_url)
         if response.status_code != 200:
             raise ValueError(
@@ -34,10 +35,10 @@ class TelegramNotifier:
             )
 
     def notify_entry(self, context=None):
-        self.send(f"'{context.function_name}' - entry.")
+        self.send(f"<b>ENTRY</b> <i>{context.function_name}</i>")
 
-    def notify_exit(self, context=None, status=None):
-        self.send(f"'{context.function_name}' - exit.\nStatus: '{status}'")
+    def notify_exit(self, context=None, status='NOT SUBMITTED'):
+        self.send(f"<b>EXIT</b> - <i>{context.function_name}</i>\n\n<pre>Status: '{status}'</pre>")
 
 
 def notify_telegram(function):
@@ -60,7 +61,7 @@ def notify_cloudwatch(function):
         function_name = args[1].function_name
         logger.info(f"'{function_name}' - entry.\nIncoming event: '{incoming_event}'")
         result = function(*args, **kwargs)
-        logger.info(f"'{function_name}' - exit.\nResult: '{result}'")
+        logger.info(f"'{function_name}' - exit.\n\nResult: '{result}'")
         return result
 
     return wrapper
@@ -69,9 +70,9 @@ def notify_cloudwatch(function):
 class Observer:
 
     def __init__(self):
-        self.sfn_client = boto3.client('stepfunctions')
-        self.logger = logging.getLogger('Observer')
+        self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(os.environ.get('Logging', logging.DEBUG))
+        self.sfn_client = boto3.client('stepfunctions')
 
     def _start_state_machine(self, message):
         response = self.sfn_client.start_execution(
@@ -103,26 +104,28 @@ class Observer:
 
 
 class Downloader:
+
     def __init__(self):
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.setLevel(os.environ.get('Logging', logging.DEBUG))
         self.bucket_name = os.environ['BUCKET_NAME']
         self.table_name = os.environ['TABLE_NAME']
         self.s3_bucket = boto3.resource('s3').Bucket(self.bucket_name)
         self.ddb_table = boto3.resource('dynamodb').Table(self.table_name)
-        self.logger = logging.getLogger('Downloader')
-        self.logger.setLevel(os.environ.get('Logging', logging.DEBUG))
-        
 
     def _download(self, youtube):
+        file_size = 0
         with tempfile.TemporaryDirectory() as tmp_dir:
             file_name = f'{youtube.video_id}.mp4'
             bucket_path = f"audio/default/{file_name}"
             logger.info(f'Starting download into {tmp_dir}...')
             download_file_path = youtube.streams.filter(only_audio=True).filter(subtype='mp4').order_by('abr').desc().first().download(output_path=tmp_dir, filename=youtube.video_id)
+            file_size = Path(download_file_path).stat().st_size
             logger.info(f'Finished download ({download_file_path}, now uploading to S3 ({self.bucket_name}:{bucket_path})')
             self.s3_bucket.upload_file(download_file_path, bucket_path)
             logger.info('Finished upload.')
 
-        return UploadInformation(bucket_path=bucket_path, timestamp_utc=int(datetime.utcnow().timestamp()))
+        return UploadInformation(bucket_path=bucket_path, timestamp_utc=int(datetime.utcnow().timestamp()), file_size=file_size)
 
     def _store_metadata(self, download_information, audio_information):
         metadata = dict([
@@ -133,7 +136,7 @@ class Downloader:
             ('Rating', str(audio_information.rating)),
             ('Description', audio_information.description),
             ('BucketPath', download_information.bucket_path),
-            ('TimestampUtc', download_information.timestamp_utc)
+            ('TimestampUtc', str(download_information.timestamp_utc))
         ])
         self.ddb_table.put_item(Item=metadata)
         logger.info(f'Storing metadata: {metadata}')
@@ -145,14 +148,15 @@ class Downloader:
         return result
 
     def handle_event(self, event):
-        data = {}
         try:
             url = event['url']
             yt = YouTube(url)
+            start_time = time.time()
             audio_information = AudioInformation(title=yt.title, video_id=yt.video_id, views=yt.views, rating=yt.rating, description=yt.description)
             download_information = self._download(yt)
             self._store_metadata(download_information, audio_information)
-            TelegramNotifier().send(f'Download finished, database updated.')
+            total_time = int(time.time() - start_time)
+            TelegramNotifier().send(f'Download finished, database updated.\n\n<code>Title:{yt.title}\nFile Size: {download_information.file_size >> 20}MB\nTransfer time: {total_time}s</code>')
             status = 'SUCCESS'
             data = dict([('url', url), ('audio_information', audio_information), ('download_information', download_information)])
         except Exception as e:
@@ -161,47 +165,56 @@ class Downloader:
         return self._build_response(status, data)
 
 
-class UpdatePodcast:
+class UpdatePodcastFeed:
+    BUCKET_URL = "https://{bucket_name}.s3.amazonaws.com"
 
     def __init__(self):
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.setLevel(os.environ.get('Logging', logging.DEBUG))
         self.bucket_name = os.environ['BUCKET_NAME']
+        self.bucket_url = self.BUCKET_URL.format(bucket_name=self.bucket_name)
         self.table_name = os.environ['TABLE_NAME']
         self.s3_bucket = boto3.resource('s3').Bucket(self.bucket_name)
         self.ddb_table = boto3.resource('dynamodb').Table(self.table_name)
-        self.logger = logging.getLogger('UpdatePodcast')
-        self.logger.setLevel(os.environ.get('Logging', logging.DEBUG))
+        self.jinja_env = Environment(
+            loader=FileSystemLoader(searchpath="./templates"),
+            autoescape=select_autoescape(['html', 'xml'])
+        )
 
-        
+    def _render_template(self, metadata):
+        template = self.jinja_env.get_template('podcast.xml.j2')
+        output = template.render(dict(podcast=dict(
+            bucket=f'{self.bucket_url}',
+            url=f'{self.bucket_url}/rss',
+            episodes=metadata)))
+        with tempfile.NamedTemporaryFile(mode='w') as tmp_file:
+            tmp_file.write(output)
+            tmp_file.flush()
+            self.s3_bucket.upload_file(
+                tmp_file.name,
+                'rss',
+                ExtraArgs={'ACL': 'public-read', 'ContentType': 'application/xml'})
+
+    def _retrieve_metadata(self):
+        items = self.ddb_table.scan()['Items']
+        return items
+
+    def _build_response(self, status, data=None):
+        result = {'Status': status}
+        if data:
+            result = {**data, **result}
+        return result
+
     def handle_event(self, event):
-        fg = FeedGenerator()
-        fg.load_extension('podcast')
-        fg.id('http://lernfunk.de/_MEDIAID_123')
-        fg.title('Testfeed')
-        fg.author({'name': 'John Doe', 'email': 'jdoe@example.com'})
-        fg.link(href='http://example.com', rel='alternate')
-        fg.category(term='test')
-        fg.contributor(name='John Doe', email='jdoe@example.com')
-        fg.icon('http://ex.com/icon.jpg')
-        fg.logo('http://ex.com/logo.jpg')
-        fg.rights('cc-by')
-        fg.subtitle('This is a cool feed!')
-        fg.link(href='http://larskiesow.de/test.atom', rel='self')
-        fg.language('de')
-
-        fe = fg.add_entry()
-        fe.id('http://lernfunk.de/media/654321/1/file.mp3')
-        fe.title('The First Episode')
-        fe.description('Enjoy our first episode.')
-        fe.enclosure('audio/default/RjEdmrxjIHQ.mp4', 0, 'audio/mpeg')
-
-        print(fg.rss_str(pretty=True))
-        fg.rss_file('/tmp/podcast.xml')
-
-        self.s3_bucket.upload_file('/tmp/podcast.xml', 'podcast.xml')
-
-
-
-        pass
+        try:
+            metadata = self._retrieve_metadata()
+            self._render_template(metadata)
+            TelegramNotifier().send(f'Podcast updated.\n\n<code>URL:<a href="{self.bucket_url}/rss">{self.bucket_url}/rss</a></code>')
+            status = 'SUCCESS'
+        except Exception as e:
+            logger.exception(e)
+            status = 'FAILED'
+        return self._build_response(status)
 
 
 @notify_telegram
@@ -219,10 +232,14 @@ def download_cast_handler(event, context):
 @notify_telegram
 @notify_cloudwatch
 def update_podcast__data_handler(event, context):
-    return UpdatePodcast().handle_event(event)
+    return UpdatePodcastFeed().handle_event(event)
 
 
 if __name__ == '__main__':
-    os.environ['TABLE_NAME'] = "PyCastData"
-    os.environ['BUCKET_NAME'] = "pycast-casts"
-    UpdatePodcast().handle_event({})
+    stack_outputs = cfn_client = boto3.client('cloudformation').describe_stacks(StackName='pycast')['Stacks'][0]['Outputs']
+    bucket_name = [output['OutputValue'] for output in stack_outputs if output['OutputKey'] == 'PyCastBucketName'][0]
+    table_name = [output['OutputValue'] for output in stack_outputs if output['OutputKey'] == 'PyCastTable'][0]
+    print(f'Bucket:{bucket_name} Table:{table_name}')
+    os.environ['TABLE_NAME'] = table_name
+    os.environ['BUCKET_NAME'] = bucket_name
+    UpdatePodcastFeed().handle_event({})
