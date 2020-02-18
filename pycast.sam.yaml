@@ -1,3 +1,4 @@
+---
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: pycast
@@ -5,6 +6,10 @@ Description: pycast
 Globals:
   Function:
     Timeout: 900
+    Environment:
+      Variables:
+        TELEGRAM_NOTIFICATION: 'true'
+        LOGGING: DEBUG
 
 Resources:
 
@@ -60,8 +65,6 @@ Resources:
       Environment:
         Variables:
           STATE_MACHINE: !Ref PyCastStateMachine
-          TELEGRAM_NOTIFICATION: true
-          LOGGING: DEBUG
       Events:
         AddEpisode:
           Type: Api
@@ -211,8 +214,6 @@ Resources:
         Variables:
           BUCKET_NAME: !Ref PyCastBucket
           TABLE_NAME: !Ref PyCastDataTable
-          TELEGRAM_NOTIFICATION: true
-          LOGGING: DEBUG
       Role: !GetAtt DownloadCastFunctionExecutionRole.Arn
 
   UpdatePodcastDataFunction:
@@ -225,8 +226,6 @@ Resources:
         Variables:
           BUCKET_NAME: !Ref PyCastBucket
           TABLE_NAME: !Ref PyCastDataTable
-          TELEGRAM_NOTIFICATION: true
-          LOGGING: DEBUG
       Role: !GetAtt UpdatePodcastDataFunctionExecutionRole.Arn
 
   DownloadCastFunctionExecutionRole:
@@ -325,7 +324,6 @@ Resources:
                 Action:
                   - 'dynamodb:Scan'
                 Resource: '*'
-
 
 
 Outputs:

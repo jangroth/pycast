@@ -12,23 +12,26 @@ import requests
 from jinja2 import Environment, select_autoescape, FileSystemLoader
 from pytube import YouTube
 
+log_level = os.environ.get('Logging', logging.DEBUG)
+
 logging.basicConfig(format='%(asctime)s %(name)s %(levelname)s %(message)s')
 logger = logging.getLogger('PyCast')
-logger.setLevel(os.environ.get('Logging', logging.DEBUG))
+logger.setLevel(log_level)
 
-AudioInformation = namedtuple('AudioInformation', ['title', 'video_id', 'views', 'rating', 'description'])
+VideoInformation = namedtuple('VideoInformation', ['title', 'video_id', 'views', 'rating', 'description'])
 UploadInformation = namedtuple('DownloadInformation', ['bucket_path', 'timestamp_utc', 'file_size'])
 
 
 class TelegramNotifier:
+    TELEGRAM_URL = 'https://api.telegram.org/bot{api_token}/sendMessage?chat_id={chat_id}&parse_mode=HTML&text={message}'
 
     def __init__(self):
-        self.api_token = boto3.client('ssm').get_parameter(Name='/pycast/telegram/api-token', WithDecryption=True)['Parameter']['Value']
-        self.chat_id = boto3.client('ssm').get_parameter(Name='/pycast/telegram/chat-id')['Parameter']['Value']
+        ssm_client = boto3.client('ssm')
+        self.api_token = ssm_client.get_parameter(Name='/pycast/telegram/api-token', WithDecryption=True)['Parameter']['Value']
+        self.chat_id = ssm_client.get_parameter(Name='/pycast/telegram/chat-id')['Parameter']['Value']
 
     def send(self, message):
-        telegram_url = f'https://api.telegram.org/bot{self.api_token}/sendMessage?chat_id={self.chat_id}&parse_mode=HTML&text={message}'
-        response = requests.get(telegram_url)
+        response = requests.get(self.TELEGRAM_URL.format(api_token=self.api_token, chat_id=self.chat_id, message=message))
         if response.status_code != 200:
             raise ValueError(
                 f'Request to Telegram returned an error {response.status_code}, the response is:\n{response.text}'
@@ -45,9 +48,11 @@ def notify_telegram(function):
     def wrapper(*args, **kwargs):
         if os.environ.get('TELEGRAM_NOTIFICATION', 'False').lower() == 'true':
             telegram = TelegramNotifier()
-            telegram.notify_entry(context=args[1])
+            if log_level == 'DEBUG':
+                telegram.notify_entry(context=args[1])
             result = function(*args, **kwargs)
-            telegram.notify_exit(context=args[1], status=result.get('Status', 'NOT SUBMITTED'))
+            if log_level == 'DEBUG':
+                telegram.notify_exit(context=args[1], status=result.get('Status', 'NOT SUBMITTED'))
         else:
             result = function(*args, **kwargs)
         return result
@@ -57,8 +62,8 @@ def notify_telegram(function):
 
 def notify_cloudwatch(function):
     def wrapper(*args, **kwargs):
-        incoming_event = args[0]
-        function_name = args[1].function_name
+        incoming_event = args[0]  # ...event
+        function_name = args[1].function_name  # ...context
         logger.info(f"'{function_name}' - entry.\nIncoming event: '{incoming_event}'")
         result = function(*args, **kwargs)
         logger.info(f"'{function_name}' - exit.\n\nResult: '{result}'")
@@ -71,8 +76,12 @@ class Observer:
 
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.logger.setLevel(os.environ.get('Logging', logging.DEBUG))
+        self.logger.setLevel(log_level)
+        self.telegram = TelegramNotifier()
         self.sfn_client = boto3.client('stepfunctions')
+
+    def _extract_incoming_message(self, event):
+        return json.loads(event['body'])
 
     def _start_state_machine(self, message):
         response = self.sfn_client.start_execution(
@@ -81,20 +90,7 @@ class Observer:
         )
         logging.info(f"Starting state machine: '{response['executionArn']}'")
 
-    def handle_event(self, event):
-        try:
-            event_body = json.loads(event['body'])
-            url = event_body['url']
-            self._start_state_machine(event_body)
-            status_code = 200
-            message = f"Received '{url}'..."
-        except KeyError as e:
-            status_code = 400
-            message = "Expecting 'url' in request body...\n{e}"
-        except Exception as e:
-            logging.exception(e)
-            status_code = 500
-            message = f"Error '{e}'"
+    def _get_return_message(self, status_code=200, message='Event received, state machine started.'):
         return {
             "statusCode": status_code,
             "body": json.dumps({
@@ -102,12 +98,26 @@ class Observer:
             }),
         }
 
+    def handle_event(self, event):
+        try:
+            event_body = self._extract_incoming_message(event)
+            self._start_state_machine(event_body)
+            result = self._get_return_message(status_code=200,
+                                              message='Event received, state machine started.')
+            self.telegram.send('Event received, starting processing.')
+        except Exception as e:
+            logging.exception(e)
+            result = self._get_return_message(status_code=500,
+                                              message=f'Error processing incoming event {event}\n\n{e}')
+        return result
+
 
 class Downloader:
 
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.logger.setLevel(os.environ.get('Logging', logging.DEBUG))
+        self.logger.setLevel(log_level)
+        self.telegram = TelegramNotifier()
         self.bucket_name = os.environ['BUCKET_NAME']
         self.table_name = os.environ['TABLE_NAME']
         self.s3_bucket = boto3.resource('s3').Bucket(self.bucket_name)
@@ -147,18 +157,34 @@ class Downloader:
             result = {**data, **result}
         return result
 
+    def _extract_url_from_event(self, event):
+        return event['url']
+
+    def _download_video(self, url):
+        yt = YouTube(url)
+        audio_information = VideoInformation(title=yt.title, video_id=yt.video_id, views=yt.views, rating=yt.rating, description=yt.description)
+        download_information = self._download(yt)
+        return audio_information, download_information
+
+    def _populate_video_information(self, url):
+        yt = YouTube(url)
+        return VideoInformation(title=yt.title, video_id=yt.video_id, views=yt.views, rating=yt.rating, description=yt.description)
+
     def handle_event(self, event):
         try:
-            url = event['url']
-            yt = YouTube(url)
-            start_time = time.time()
-            audio_information = AudioInformation(title=yt.title, video_id=yt.video_id, views=yt.views, rating=yt.rating, description=yt.description)
-            download_information = self._download(yt)
-            self._store_metadata(download_information, audio_information)
-            total_time = int(time.time() - start_time)
-            TelegramNotifier().send(f'Download finished, database updated.\n\n<code>Title:{yt.title}\nFile Size: {download_information.file_size >> 20}MB\nTransfer time: {total_time}s</code>')
-            status = 'SUCCESS'
-            data = dict([('url', url), ('audio_information', audio_information), ('download_information', download_information)])
+            url = self._extract_url_from_event(event)
+            video_information = self._populate_video_information(url)
+            if self._is_new_video(video_information):
+                start_time = time.time()
+                download_information = self._download_video(url)
+                self._store_metadata(download_information, video_information)
+                total_time = int(time.time() - start_time)
+                self.telegram.send(f'Download finished, database updated.\n\n<code>Title:{video_information.title}\nFile Size: {download_information.file_size >> 20}MB\nTransfer time: {total_time}s</code>')
+                status = 'SUCCESS'
+            else:
+                self.telegram.send(f'Video {video_information.title} is already in the cast. Skipping download.')
+                status = 'DUPLICATE'
+            data = dict([('url', url), ('audio_information', video_information), ('download_information', download_information)])
         except Exception as e:
             logger.exception(e)
             status = 'FAILED'
@@ -170,7 +196,7 @@ class UpdatePodcastFeed:
 
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.logger.setLevel(os.environ.get('Logging', logging.DEBUG))
+        self.logger.setLevel(log_level)
         self.bucket_name = os.environ['BUCKET_NAME']
         self.bucket_url = self.BUCKET_URL.format(bucket_name=self.bucket_name)
         self.table_name = os.environ['TABLE_NAME']
