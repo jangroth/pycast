@@ -2,4 +2,5 @@
 .aws-sam
 samconfig.toml
 .sam
+.coverage
 __pycache__/

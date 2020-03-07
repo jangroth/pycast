@@ -26,16 +26,16 @@ BASE_EVENT = '''
 
 @pytest.fixture
 def good_event():
-    base_event = json.loads(BASE_EVENT)
-    base_event['body'] = '{\"url\":\"https://www.ccc.de\"}'
-    return base_event
+    event = json.loads(BASE_EVENT)
+    event['body'] = '{\"url\":\"https://www.ccc.de\"}'
+    return event
 
 
 @pytest.fixture
 def bad_event():
-    base_event = json.loads(BASE_EVENT)
-    base_event['foo'] = 'bar'
-    return base_event
+    event = json.loads(BASE_EVENT)
+    event['foo'] = 'bar'
+    return event
 
 
 @pytest.fixture()
@@ -46,7 +46,7 @@ def obs():
     return the_object
 
 
-def test_return_200_on_good_event(good_event, obs):
+def test_should_process_good_event_and_start_state_machine(good_event, obs):
     obs._start_state_machine = MagicMock()
 
     result = obs.handle_event(good_event)
