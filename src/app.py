@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import sys
 import tempfile
 import time
 from collections import namedtuple
@@ -19,8 +20,8 @@ logging.basicConfig(format='%(asctime)s %(name)s %(levelname)s %(message)s')
 logger = logging.getLogger('PyCastApplication')
 logger.setLevel(os.environ.get('LOGGING', logging.DEBUG))
 
-VideoInformation = namedtuple('VideoInformation', ['video_id', 'title', 'views', 'rating', 'description'])
-UploadInformation = namedtuple('DownloadInformation', ['bucket_path', 'timestamp_utc', 'file_size'])
+VideoInformation = namedtuple('VideoInformation', ['video_id', 'title', 'views', 'rating', 'description', 'source_url'])
+UploadInformation = namedtuple('UploadInformation', ['bucket_path', 'timestamp_utc', 'file_size'])
 
 
 class TelegramNotifier:
@@ -167,9 +168,25 @@ class Downloader:
         download_information = self._download(yt)
         return video_information, download_information
 
+    def _upload_to_s3(self, local_file_path, video_information):
+        bucket_path = f"audio/default/{video_information.video_id}"
+        self.s3_bucket.upload_file(local_file_path, bucket_path)
+        file_size = Path(local_file_path).stat().st_size
+        return UploadInformation(bucket_path=bucket_path, timestamp_utc=int(datetime.utcnow().timestamp()), file_size=file_size)
+
+    def _download_to_tmp_path(self, video_information):
+        return YouTube(video_information.source_url) \
+            .streams \
+            .filter(only_audio=True) \
+            .filter(subtype='mp4') \
+            .order_by('abr') \
+            .desc() \
+            .first() \
+            .download(output_path='/tmp', filename=video_information.video_id)
+
     def _populate_video_information(self, url):
         yt = YouTube(url)
-        return VideoInformation(video_id=yt.video_id, title=yt.title, views=yt.views, rating=yt.rating, description=yt.description)
+        return VideoInformation(video_id=yt.video_id, title=yt.title, views=yt.views, rating=yt.rating, description=yt.description, source_url=url)
 
     def _is_new_video(self, video_information):
         return self.ddb_table.query(
@@ -182,15 +199,16 @@ class Downloader:
             video_information = self._populate_video_information(url)
             if self._is_new_video(video_information):
                 start_time = time.time()
-                download_information = self._download_video(url)
-                self._store_metadata(download_information, video_information)
+                local_file_path = self._download_to_tmp_path(video_information)
+                upload_information = self._upload_to_s3(local_file_path, video_information)
+                self._store_metadata(upload_information, video_information)
                 total_time = int(time.time() - start_time)
                 self.telegram.send(f'Download finished, database updated.\n\n<code>Title:{video_information.title}\nFile Size: {download_information.file_size >> 20}MB\nTransfer time: {total_time}s</code>')
                 status = 'SUCCESS'
             else:
                 self.telegram.send(f'Video {video_information.title} already in the cast. Skipping download.')
                 status = 'DUPLICATE'
-            data = dict([('url', url), ('video_information', video_information), ('download_information', download_information)])
+            data = dict([('url', url), ('video_information', video_information)])
         except Exception as e:
             logger.exception(e)
             status = 'FAILED'
@@ -274,4 +292,4 @@ if __name__ == '__main__':
     print(f'Bucket:{bucket_name} Table:{table_name}')
     os.environ['TABLE_NAME'] = table_name
     os.environ['BUCKET_NAME'] = bucket_name
-    Downloader()._is_new_video(VideoInformation(video_id='RjEdmrxjIHQ', title='title', views='views', rating='rating', description='description'))
+    Downloader().handle_event(dict(url='https://www.youtube.com/watch?v=RjEdmrxjIHQ'))

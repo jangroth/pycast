@@ -11,7 +11,7 @@ GOOD_EVENT = '''
 }
 '''
 
-VIDEO_INFORMATION = VideoInformation(video_id='video_id', title='title', views='views', rating='rating', description='description')
+VIDEO_INFORMATION = VideoInformation(video_id='video_id', title='title', views='views', rating='rating', description='description', source_url='source_url')
 
 
 @pytest.fixture
