@@ -128,13 +128,18 @@ Resources:
                 "Type": "Choice",
                 "Choices": [
                 {
-                  "Variable": "$.Status",
+                  "Variable": "$.status",
                   "StringEquals": "SUCCESS",
                   "Next": "UpdatePodcastData"
                 },
                 {
-                  "Variable": "$.Status",
-                  "StringEquals": "FAILED",
+                  "Variable": "$.status",
+                  "StringEquals": "NO_ACTION",
+                  "Next": "SuccessPyCast"
+                },
+                {
+                  "Variable": "$.status",
+                  "StringEquals": "FAILURE",
                   "Next": "FailDownloadCast"
                 }
                 ],
@@ -149,13 +154,13 @@ Resources:
                 "Type": "Choice",
                 "Choices": [
                 {
-                  "Variable": "$.Status",
+                  "Variable": "$.status",
                   "StringEquals": "SUCCESS",
                   "Next": "SuccessPyCast"
                 },
                 {
-                  "Variable": "$.Status",
-                  "StringEquals": "FAILED",
+                  "Variable": "$.status",
+                  "StringEquals": "FAILURE",
                   "Next": "FailUpdatePodcastData"
                 }
                 ],

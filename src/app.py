@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import sys
 import tempfile
 import time
 from collections import namedtuple
@@ -125,20 +124,6 @@ class Downloader:
         self.s3_bucket = boto3.resource('s3').Bucket(self.bucket_name)
         self.ddb_table = boto3.resource('dynamodb').Table(self.table_name)
 
-    def _download(self, youtube):
-        file_size = 0
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            file_name = f'{youtube.video_id}.mp4'
-            bucket_path = f"audio/default/{file_name}"
-            logger.info(f'Starting download into {tmp_dir}...')
-            download_file_path = youtube.streams.filter(only_audio=True).filter(subtype='mp4').order_by('abr').desc().first().download(output_path=tmp_dir, filename=youtube.video_id)
-            file_size = Path(download_file_path).stat().st_size
-            logger.info(f'Finished download ({download_file_path}, now uploading to S3 ({self.bucket_name}:{bucket_path})')
-            self.s3_bucket.upload_file(download_file_path, bucket_path)
-            logger.info('Finished upload.')
-
-        return UploadInformation(bucket_path=bucket_path, timestamp_utc=int(datetime.utcnow().timestamp()), file_size=file_size)
-
     def _store_metadata(self, download_information, video_information):
         metadata = dict([
             ('CastId', 'default'),
@@ -153,15 +138,6 @@ class Downloader:
         self.ddb_table.put_item(Item=metadata)
         logger.info(f'Storing metadata: {metadata}')
 
-    def _build_response(self, status, data=None):
-        result = {'Status': status}
-        if data:
-            result = {**data, **result}
-        return result
-
-    def _extract_url_from_event(self, event):
-        return event['url']
-
     def _download_video(self, url):
         yt = YouTube(url)
         video_information = VideoInformation(video_id=yt.video_id, title=yt.title, views=yt.views, rating=yt.rating, description=yt.description)
@@ -174,7 +150,7 @@ class Downloader:
         file_size = Path(local_file_path).stat().st_size
         return UploadInformation(bucket_path=bucket_path, timestamp_utc=int(datetime.utcnow().timestamp()), file_size=file_size)
 
-    def _download_to_tmp_path(self, video_information):
+    def _download_to_tmp(self, video_information):
         return YouTube(video_information.source_url) \
             .streams \
             .filter(only_audio=True) \
@@ -193,26 +169,31 @@ class Downloader:
             KeyConditionExpression=Key('EpisodeId').eq(video_information.video_id)
         )['Items']
 
+    def _build_response(self, status, data=None):
+        result = {'status': status}
+        if data:
+            result = {**data, **result}
+        return result
+
     def handle_event(self, event):
         try:
-            url = self._extract_url_from_event(event)
+            url = event['url']
             video_information = self._populate_video_information(url)
             if self._is_new_video(video_information):
                 start_time = time.time()
-                local_file_path = self._download_to_tmp_path(video_information)
+                local_file_path = self._download_to_tmp(video_information)
                 upload_information = self._upload_to_s3(local_file_path, video_information)
                 self._store_metadata(upload_information, video_information)
                 total_time = int(time.time() - start_time)
-                self.telegram.send(f'Download finished, database updated.\n\n<code>Title:{video_information.title}\nFile Size: {download_information.file_size >> 20}MB\nTransfer time: {total_time}s</code>')
+                self.telegram.send(f'Download finished, database updated.\n\n<code>Title:{video_information.title}\nFile Size: {upload_information.file_size >> 20}MB\nTransfer time: {total_time}s</code>')
                 status = 'SUCCESS'
             else:
                 self.telegram.send(f'Video {video_information.title} already in the cast. Skipping download.')
-                status = 'DUPLICATE'
-            data = dict([('url', url), ('video_information', video_information)])
+                status = 'NO_ACTION'
         except Exception as e:
             logger.exception(e)
-            status = 'FAILED'
-        return self._build_response(status, data)
+            status = 'FAILURE'
+        return self._build_response(status, event)
 
 
 class UpdatePodcastFeed:
